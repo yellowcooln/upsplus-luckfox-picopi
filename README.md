@@ -28,6 +28,30 @@ curl -Lso- https://git.io/JLygb
 ```
 When encountering low battery, it will automatically shut down and turn off the UPS and it will restart when AC power comes.
 
+## LuckFox Pico Pi install
+On the LuckFox Pico Pi / Buildroot image, use the repo-local installer instead of the old Raspberry Pi flow:
+
+```bash
+cd /root/upsplus-luckfox-picopi
+sh install.sh
+```
+
+This installer:
+- creates a local Python virtual environment in `.venv`
+- installs the required Python dependencies
+- installs wrapper commands into `/usr/local/bin`
+- installs and starts the Prometheus exporter via BusyBox `init.d`
+
+Optional cron jobs:
+```bash
+sh install.sh --enable-monitor-cron --enable-iot-cron
+```
+
+To remove the installed wrappers, service, cron entries, and virtual environment:
+```bash
+sh uninstall.sh
+```
+
 ## Prometheus / Grafana
 This repo also includes:
 

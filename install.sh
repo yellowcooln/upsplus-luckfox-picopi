@@ -1,285 +1,167 @@
-#!/bin/bash
-# UPS Plus installation script.
+#!/bin/sh
+# LuckFox Pico Pi / Buildroot installer for UPS Plus scripts.
 
-# initializing init-functions.
-. /lib/lsb/init-functions
-sudo raspi-config nonint do_i2c 0
+set -eu
 
-# check if the network is working properly.
-log_action_msg "Welcome to 52Pi Technology UPS Plus auto-install Program!"
-log_action_msg "More information please visit here:"
-log_action_msg "-----------------------------------------------------"
-log_action_msg "https://wiki.52pi.com/index.php/UPS_Plus_SKU:_EP-0136"
-log_action_msg "-----------------------------------------------------"
-log_action_msg "Start the configuration environment check..."
-ping_result=`ping -c 4 www.github.com &> /dev/null` 
-if [[ $ping_result -ne 0 ]]; then
-	log_failure_msg "Network is not available!"
-	log_warning_msg "Please check the network configuration and try again!"
-else
-	log_success_msg "Network status is ok..."
-fi
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+VENV_DIR="${SCRIPT_DIR}/.venv"
+VENV_PYTHON="${VENV_DIR}/bin/python3"
+BIN_DIR="/usr/local/bin"
+INIT_TEMPLATE="${SCRIPT_DIR}/upsplusv5-prometheus-exporter.initd"
+INIT_TARGET="/etc/init.d/S80upsplusv5-prometheus-exporter"
+PIDFILE="/var/run/upsplusv5-prometheus-exporter.pid"
+LOGFILE="/var/log/upsplusv5-prometheus-exporter.log"
+PORT="${UPSPLUS_EXPORTER_PORT:-9105}"
 
-# Package check and installation
-install_pkgs()
-{
-	`sudo apt-get -qq update`
-	`sudo apt-get -y -qq install sudo git i2c-tools`
+ENABLE_EXPORTER=1
+ENABLE_MONITOR_CRON=0
+ENABLE_IOT_CRON=0
+
+info() {
+  printf '%s\n' "$*"
 }
 
-log_action_msg "Start the software check..."
-pkgs=`dpkg -l | awk '{print $2}' | egrep ^git$`
-if [[ $pkgs = 'git' ]]; then
-	log_success_msg "git has been installed."
-else
-	log_action_msg "Installing git package..."
-	install_pkgs
-	if [[ $? -eq 0 ]]; then 
-	   log_success_msg "Package installation successfully."
-	else
-	   log_failure_msg "Package installation is failed,please install git package manually or check the repository"
-	fi
-fi	
+fail() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
 
-# create python virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
+usage() {
+  cat <<'EOF'
+Usage: sh install.sh [options]
 
-# install pi-ina219 library.
-log_action_msg "Installing pi-ina219 library..."
-python3 -m pip install pi-ina219
-if [[ $? -eq 0 ]]; then
-   log_success_msg "pi-ina219 installation successful."
-else
-   log_failure_msg "pi-ina219 installation failed!"
-   log_warning_msg "Please install it by manual: python3 -m pip install pi-ina219"
-fi
-
-# install smbus2 library.
-log_action_msg "Installing smbus2 library..."
-python3 -m pip install smbus2
-if [[ $? -eq 0 ]]; then
-        log_success_msg "smbus2 installation successful."
-else
-    log_failure_msg "smbus2 installation failed!"
-    log_warning_msg "Please install it by manual: python3 -m pip install smbus2"
-fi
-
-# install requests library.
-log_action_msg "Installing requests library..."
-python3 -m pip install requests
-if [[ $? -eq 0 ]]; then
-        log_success_msg "requests installation successful."
-else
-    log_failure_msg "requests installation failed!"
-    log_warning_msg "Please install it by manual: python3 -m pip install requests"
-fi
-
-# TODO: Create daemon service or crontab by creating python scripts. 
-# create bin folder and create python script to detect UPS's status.
-log_action_msg "create $HOME/bin directory..."
-/bin/mkdir -p $HOME/bin
-export PATH=$PATH:$HOME/bin
-
-# Create python script.
-cat > $HOME/bin/upsPlus.py << EOF
-#!/usr/bin/env python3
-
-import os
-import time
-import smbus2
-import logging
-from ina219 import INA219,DeviceRangeError
-
-
-# Define I2C bus
-DEVICE_BUS = 1
-
-# Define device i2c slave address.
-DEVICE_ADDR = 0x17
-
-# Set the threshold of UPS automatic power-off to prevent damage caused by battery over-discharge, unit: mV.
-PROTECT_VOLT = 3700  
-
-# Set the sample period, Unit: min default: 2 min.
-SAMPLE_TIME = 2
-
-# Instance INA219 and getting information from it.
-ina_supply = INA219(0.00725, busnum=DEVICE_BUS, address=0x40)
-ina_supply.configure()
-supply_voltage = ina_supply.voltage()
-supply_current = ina_supply.current()
-supply_power = ina_supply.power()
-print("-"*60)
-print("------Current information of the detected Raspberry Pi------")
-print("-"*60)
-print("Raspberry Pi Supply Voltage: %.3f V" % supply_voltage)
-print("Raspberry Pi Current Current Consumption: %.3f mA" % supply_current)
-print("Raspberry Pi Current Power Consumption: %.3f mW" % supply_power)
-print("-"*60)
-
-# Batteries information
-ina_batt = INA219(0.005, busnum=DEVICE_BUS, address=0x45)
-ina_batt.configure()
-batt_voltage = ina_batt.voltage()
-batt_current = ina_batt.current()
-batt_power = ina_batt.power()
-print("-------------------Batteries information-------------------")
-print("-"*60)
-print("Voltage of Batteries: %.3f V" % batt_voltage)
-try:
-    if batt_current > 0:
-        print("Battery Current (Charging) Rate: %.3f mA"% batt_current)
-        print("Current Battery Power Supplement: %.3f mW"% batt_power)
-    else:
-        print("Battery Current (discharge) Rate: %.3f mA"% batt_current)
-        print("Current Battery Power Consumption: %.3f mW"% batt_power)
-        print("-"*60)
-except DeviceRangeError:
-     print("-"*60)
-     print('Battery power is too high.')
-
-# Raspberry Pi Communicates with MCU via i2c protocol.
-bus = smbus2.SMBus(DEVICE_BUS)
-
-aReceiveBuf = []
-aReceiveBuf.append(0x00) 
-
-# Read register and add the data to the list: aReceiveBuf
-for i in range(1, 255):
-    aReceiveBuf.append(bus.read_byte_data(DEVICE_ADDR, i))
-
-# Enable Back-to-AC fucntion.
-# Enable: write 1 to register 0x19 == 25
-# Disable: write 0 to register 0x19 == 25
-
-bus.write_byte_data(DEVICE_ADDR, 25, 1)
-
-# Reset Protect voltage
-bus.write_byte_data(DEVICE_ADDR, 17, PROTECT_VOLT & 0xFF)
-bus.write_byte_data(DEVICE_ADDR, 18, (PROTECT_VOLT >> 8)& 0xFF)
-print("Successfully set the protection voltage to: %d mV" % PROTECT_VOLT)
-
-if (aReceiveBuf[8] << 8 | aReceiveBuf[7]) > 4000:
-    print('-'*60)
-    print('Currently charging via Type C Port.')
-elif (aReceiveBuf[10] << 8 | aReceiveBuf[9])> 4000:
-    print('-'*60)
-    print('Currently charging via Micro USB Port.')
-else:
-    print('-'*60)
-    print('Currently not charging.')
-# Consider shutting down to save data or send notifications
-    if ((batt_voltage * 1000) < (PROTECT_VOLT + 200)):
-        print('-'*60)
-        print('The battery is going to dead! Ready to shut down!')
-# It will cut off power when initialized shutdown sequence.
-        bus.write_byte_data(DEVICE_ADDR, 24,240)
-        os.system("sudo sync && sudo halt")
-        while True:
-            time.sleep(10)
+Options:
+  --no-exporter-service   Do not install/start the Prometheus exporter init script
+  --enable-monitor-cron   Add a cron entry to run upsplus.py every minute
+  --enable-iot-cron       Add a cron entry to run upsplus_iot.py every minute
+  --help                  Show this help
 EOF
-log_action_msg "Create python3 script in location: $HOME/bin/upsPlus.py Successful"
-# Upload the battery status to the data platform for subsequent technical support services 
-# Create python file
-cat > $HOME/bin/upsPlus_iot.py << EOF
-#!/usr/bin/env python3
+}
 
-import time
-import smbus2
-import requests
-from ina219 import INA219,DeviceRangeError
-import random
+need_root() {
+  [ "$(id -u)" -eq 0 ] || fail "Run as root on the LuckFox."
+}
 
-DEVICE_BUS = 1
-DEVICE_ADDR = 0x17
-PROTECT_VOLT = 3700
-SAMPLE_TIME = 2
-FEED_URL = "https://api.52pi.com/feed"
-time.sleep(random.randint(0, 59))
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
+}
 
-DATA = dict()
-
-ina_supply = INA219(0.00725, busnum=DEVICE_BUS, address=0x40)
-ina_supply.configure()
-supply_voltage = ina_supply.voltage()
-supply_current = ina_supply.current()
-DATA['PiVccVolt'] = supply_voltage
-DATA['PiIddAmps'] = supply_current
-
-ina_batt = INA219(0.005, busnum=DEVICE_BUS, address=0x45)
-ina_batt.configure()
-batt_voltage = ina_batt.voltage()
-batt_current = ina_batt.current()
-DATA['BatVccVolt'] = batt_voltage
-try:
-    DATA['BatIddAmps'] = batt_current
-except DeviceRangeError:
-    DATA['BatIddAmps'] = 16000
-
-bus = smbus2.SMBus(DEVICE_BUS)
-
-aReceiveBuf = []
-aReceiveBuf.append(0x00) # 占位符
-
-for i in range(1,255):
-    aReceiveBuf.append(bus.read_byte_data(DEVICE_ADDR, i))
-
-DATA['McuVccVolt'] = aReceiveBuf[2] << 8 | aReceiveBuf[1]
-DATA['BatPinCVolt'] = aReceiveBuf[6] << 8 | aReceiveBuf[5]
-DATA['ChargeTypeCVolt'] = aReceiveBuf[8] << 8 | aReceiveBuf[7]
-DATA['ChargeMicroVolt'] = aReceiveBuf[10] << 8 | aReceiveBuf[9]
-
-DATA['BatTemperature'] = aReceiveBuf[12] << 8 | aReceiveBuf[11]
-DATA['BatFullVolt'] = aReceiveBuf[14] << 8 | aReceiveBuf[13]
-DATA['BatEmptyVolt'] = aReceiveBuf[16] << 8 | aReceiveBuf[15]
-DATA['BatProtectVolt'] = aReceiveBuf[18] << 8 | aReceiveBuf[17]
-DATA['SampleTime'] = aReceiveBuf[22] << 8 | aReceiveBuf[21]
-DATA['AutoPowerOn'] = aReceiveBuf[25]
-
-DATA['OnlineTime'] = aReceiveBuf[31] << 24 | aReceiveBuf[30] << 16 | aReceiveBuf[29] << 8 | aReceiveBuf[28]
-DATA['FullTime'] = aReceiveBuf[35] << 24 | aReceiveBuf[34] << 16 | aReceiveBuf[33] << 8 | aReceiveBuf[32]
-DATA['OneshotTime'] = aReceiveBuf[39] << 24 | aReceiveBuf[38] << 16 | aReceiveBuf[37] << 8 | aReceiveBuf[36]
-DATA['Version'] = aReceiveBuf[41] << 8 | aReceiveBuf[40]
-
-DATA['UID0'] = "%08X" % (aReceiveBuf[243] << 24 | aReceiveBuf[242] << 16 | aReceiveBuf[241] << 8 | aReceiveBuf[240]) 
-DATA['UID1'] = "%08X" % (aReceiveBuf[247] << 24 | aReceiveBuf[246] << 16 | aReceiveBuf[245] << 8 | aReceiveBuf[244]) 
-DATA['UID2'] = "%08X" % (aReceiveBuf[251] << 24 | aReceiveBuf[250] << 16 | aReceiveBuf[249] << 8 | aReceiveBuf[248])
-
-print(DATA)
-r = requests.post(FEED_URL, data=DATA)
-print(r.text)
-
+install_wrapper() {
+  name="$1"
+  target="$2"
+  cat > "${BIN_DIR}/${name}" <<EOF
+#!/bin/sh
+exec "${VENV_PYTHON}" "${target}" "\$@"
 EOF
-log_success_msg "Create UPS Plus IoT customer service python script successful" 
-# Add script to crontab 
-log_action_msg "Add into general crontab list."
+  chmod 0755 "${BIN_DIR}/${name}"
+}
 
-(crontab -l 2>/dev/null; echo "* * * * * $HOME/.venv/bin/python3 $HOME/bin/upsPlus.py > /tmp/upsPlus.log") | crontab -
-(crontab -l 2>/dev/null; echo "* * * * * $HOME/.venv/bin/python3 $HOME/bin/upsPlus_iot.py > /tmp/upsPlus_iot.log") | crontab -
-sudo systemctl restart cron
+append_cron_line() {
+  line="$1"
+  current=$(crontab -l 2>/dev/null || true)
+  printf '%s\n' "$current" | grep -F -q "$line" && return 0
+  (
+    printf '%s\n' "$current"
+    printf '%s\n' "$line"
+  ) | crontab -
+}
 
-if [[ $? -eq 0 ]]; then
-	log_action_msg "crontab has been created successful!"
-else
-	log_failure_msg "Create crontab failed!!"
-	log_warning_msg "Please create crontab manually."
-	log_action_msg "Usage: crontab -e"
-fi 
+install_exporter_service() {
+  [ -f "$INIT_TEMPLATE" ] || fail "Missing init script template: $INIT_TEMPLATE"
 
-# Testing and Greetings
-if [[ -e $HOME/bin/upsPlus.py ]]; then 
-    python3 $HOME/bin/upsPlus.py 
-    if [[ $? -eq 0 ]]; then
-       log_success_msg "UPS Plus Installation is Complete!"
-       log_action_msg "-----------------More Information--------------------"
-       log_action_msg "https://wiki.52pi.com/index.php/UPS_Plus_SKU:_EP-0136"
-       log_action_msg "-----------------------------------------------------"
-    else
-       log_failure_msg "UPS Plus Installation is Incomplete!"
-       log_action_msg "Please visit wiki for more information:"
-       log_action_msg "-----------------------------------------------------"
-       log_action_msg "https://wiki.52pi.com/index.php/UPS_Plus_SKU:_EP-0136"
-       log_action_msg "-----------------------------------------------------"
-    fi 
-fi 
+  sed \
+    -e "s|^WORKDIR=.*|WORKDIR=\"${SCRIPT_DIR}\"|" \
+    -e "s|^PYTHON=.*|PYTHON=\"${VENV_PYTHON}\"|" \
+    -e "s|^PORT=.*|PORT=\"${PORT}\"|" \
+    "$INIT_TEMPLATE" > "$INIT_TARGET"
+  chmod 0755 "$INIT_TARGET"
+
+  if "$INIT_TARGET" status >/dev/null 2>&1; then
+    "$INIT_TARGET" restart
+  else
+    "$INIT_TARGET" start
+  fi
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-exporter-service)
+      ENABLE_EXPORTER=0
+      ;;
+    --enable-monitor-cron)
+      ENABLE_MONITOR_CRON=1
+      ;;
+    --enable-iot-cron)
+      ENABLE_IOT_CRON=1
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "Unknown option: $1"
+      ;;
+  esac
+  shift
+done
+
+need_root
+need_cmd python3
+need_cmd git
+need_cmd i2cdetect
+
+info "Installing UPS Plus support for LuckFox Pico Pi"
+info "Repo: ${SCRIPT_DIR}"
+
+if [ ! -x "$VENV_PYTHON" ]; then
+  info "Creating virtual environment at ${VENV_DIR}"
+  python3 -m venv "$VENV_DIR"
+fi
+
+info "Installing Python dependencies into ${VENV_DIR}"
+"$VENV_PYTHON" -m pip install --upgrade pip setuptools wheel
+"$VENV_PYTHON" -m pip install \
+  pi-ina219 \
+  smbus2 \
+  requests \
+  prometheus_client
+
+info "Installing command wrappers into ${BIN_DIR}"
+install_wrapper upsplus "${SCRIPT_DIR}/upsplus.py"
+install_wrapper upsplus-iot "${SCRIPT_DIR}/upsplus_iot.py"
+install_wrapper upsplusv5-prometheus-exporter "${SCRIPT_DIR}/upsplusv5-prometheus-exporter.py"
+install_wrapper upsplus-demo "${SCRIPT_DIR}/Full-featured-demo-code.py"
+install_wrapper upsplus-ota "${SCRIPT_DIR}/OTA_firmware_upgrade.py"
+
+if [ "$ENABLE_EXPORTER" -eq 1 ]; then
+  info "Installing Prometheus exporter service"
+  install_exporter_service
+fi
+
+if [ "$ENABLE_MONITOR_CRON" -eq 1 ] || [ "$ENABLE_IOT_CRON" -eq 1 ]; then
+  need_cmd crontab
+fi
+
+if [ "$ENABLE_MONITOR_CRON" -eq 1 ]; then
+  info "Adding cron entry for upsplus.py"
+  append_cron_line "* * * * * ${BIN_DIR}/upsplus >> /tmp/upsplus.log 2>&1"
+fi
+
+if [ "$ENABLE_IOT_CRON" -eq 1 ]; then
+  info "Adding cron entry for upsplus_iot.py"
+  append_cron_line "* * * * * ${BIN_DIR}/upsplus-iot >> /tmp/upsplus_iot.log 2>&1"
+fi
+
+info "Testing UPS script"
+"$VENV_PYTHON" "${SCRIPT_DIR}/upsplus.py"
+
+info "Install complete."
+info "Commands:"
+info "  ${BIN_DIR}/upsplus"
+info "  ${BIN_DIR}/upsplus-iot"
+info "  ${BIN_DIR}/upsplusv5-prometheus-exporter"
+if [ "$ENABLE_EXPORTER" -eq 1 ]; then
+  info "Exporter status:"
+  "$INIT_TARGET" status || true
+  info "Metrics: http://<luckfox-ip>:${PORT}/metrics"
+fi
