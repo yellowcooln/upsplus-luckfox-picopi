@@ -7,13 +7,35 @@ import smbus2  # Required: smbus2 - pip3 install smbus2
 import requests
 
 # How to enter into OTA mode:
-# Method 1) Setting register in terminal: i2cset -y 1 0x17 50 127 b
+# Method 1) Setting register in terminal: i2cset -y 2 0x17 50 127 b
 # Method 2) Remove all power connections and batteries, and then hold the power button, insert the batteries.
 
 # Define device bus and address, and firmware url.
-DEVICE_BUS = 1
+DEVICE_BUSES = (2, 1, 3, 4)
 DEVICE_ADDR = 0x18
 UPDATE_URL = "https://api.52pi.com/update"
+
+
+def detect_i2c_bus(addresses=(0x18,), candidates=DEVICE_BUSES):
+    bus_override = os.environ.get("UPSPLUS_I2C_BUS", "").strip()
+    if bus_override:
+        return int(bus_override)
+
+    for bus_num in candidates:
+        try:
+            bus = smbus2.SMBus(bus_num)
+            try:
+                for address in addresses:
+                    bus.read_byte(address)
+            finally:
+                bus.close()
+            return bus_num
+        except Exception:
+            continue
+    raise RuntimeError(f"Could not find UPS Plus OTA device on I2C buses: {', '.join(str(bus) for bus in candidates)}")
+
+
+DEVICE_BUS = detect_i2c_bus()
 
 # instance of bus.
 bus = smbus2.SMBus(DEVICE_BUS)

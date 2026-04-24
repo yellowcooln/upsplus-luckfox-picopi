@@ -6,23 +6,47 @@ Advanced users can select the functions they need through the function options p
 '''
 
 import time
+import os
 import smbus2
 import logging
 from ina219 import INA219,DeviceRangeError
 
-DEVICE_BUS = 1
+DEVICE_NAME = "LuckFox Pico Pi"
+DEVICE_BUSES = (2, 1, 3, 4)
 DEVICE_ADDR = 0x17
 PROTECT_VOLT = 3700
 SAMPLE_TIME = 2
+
+
+def detect_i2c_bus(addresses=(0x17, 0x40, 0x45), candidates=DEVICE_BUSES):
+    bus_override = os.environ.get("UPSPLUS_I2C_BUS", "").strip()
+    if bus_override:
+        return int(bus_override)
+
+    for bus_num in candidates:
+        try:
+            bus = smbus2.SMBus(bus_num)
+            try:
+                for address in addresses:
+                    bus.read_byte(address)
+            finally:
+                bus.close()
+            return bus_num
+        except Exception:
+            continue
+    raise RuntimeError(f"Could not find UPS Plus devices on I2C buses: {', '.join(str(bus) for bus in candidates)}")
+
+
+DEVICE_BUS = detect_i2c_bus()
 
 ina_supply = INA219(0.00725, busnum=DEVICE_BUS, address=0x40)
 ina_supply.configure()
 supply_voltage = ina_supply.voltage()
 supply_current = ina_supply.current()
 supply_power = ina_supply.power()
-print("Raspberry Pi power supply voltage: %.3f V" % supply_voltage)
-print("Current current consumption of Raspberry Pi: %.3f mA" % supply_current)
-print("Current power consumption of Raspberry Pi: %.3f mW" % supply_power)
+print(f"{DEVICE_NAME} power supply voltage: %.3f V" % supply_voltage)
+print(f"Current current consumption of {DEVICE_NAME}: %.3f mA" % supply_current)
+print(f"Current power consumption of {DEVICE_NAME}: %.3f mW" % supply_power)
 
 
 ina_batt = INA219(0.005, busnum=DEVICE_BUS, address=0x45)
@@ -50,7 +74,7 @@ for i in range(1,255):
     aReceiveBuf.append(bus.read_byte_data(DEVICE_ADDR, i))
 
 print("Current processor voltage: %d mV"% (aReceiveBuf[2] << 8 | aReceiveBuf[1]))
-print("Current Raspberry Pi report voltage: %d mV"% (aReceiveBuf[4] << 8 | aReceiveBuf[3]))
+print(f"Current {DEVICE_NAME} report voltage: %d mV"% (aReceiveBuf[4] << 8 | aReceiveBuf[3]))
 print("Current battery port report voltage: %d mV"% (aReceiveBuf[6] << 8 | aReceiveBuf[5])) # This value is inaccurate during charging
 print("Current charging interface report voltage (Type C): %d mV"% (aReceiveBuf[8] << 8 | aReceiveBuf[7]))
 print("Current charging interface report voltage (Micro USB): %d mV"% (aReceiveBuf[10] << 8 | aReceiveBuf[9]))

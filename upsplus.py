@@ -7,9 +7,8 @@ import smbus2
 import logging
 from ina219 import INA219,DeviceRangeError
 
-
-# Define I2C bus
-DEVICE_BUS = 1
+DEVICE_NAME = "LuckFox Pico Pi"
+DEVICE_BUSES = (2, 1, 3, 4)
 
 # Define device i2c slave address.
 DEVICE_ADDR = 0x17
@@ -20,6 +19,28 @@ PROTECT_VOLT = 3500
 # Set the sample period, Unit: min default: 2 min.
 SAMPLE_TIME = 2
 
+
+def detect_i2c_bus(addresses=(0x17, 0x40, 0x45), candidates=DEVICE_BUSES):
+    bus_override = os.environ.get("UPSPLUS_I2C_BUS", "").strip()
+    if bus_override:
+        return int(bus_override)
+
+    for bus_num in candidates:
+        try:
+            bus = smbus2.SMBus(bus_num)
+            try:
+                for address in addresses:
+                    bus.read_byte(address)
+            finally:
+                bus.close()
+            return bus_num
+        except Exception:
+            continue
+    raise RuntimeError(f"Could not find UPS Plus devices on I2C buses: {', '.join(str(bus) for bus in candidates)}")
+
+
+DEVICE_BUS = detect_i2c_bus()
+
 # Instance INA219 and getting information from it.
 ina_supply = INA219(0.00725, busnum=DEVICE_BUS, address=0x40)
 ina_supply.configure()
@@ -27,11 +48,11 @@ supply_voltage = ina_supply.voltage()
 supply_current = ina_supply.current()
 supply_power = ina_supply.power()
 print("-"*60)
-print("------Current information of the detected Raspberry Pi------")
+print(f"------Current information of the detected {DEVICE_NAME}------")
 print("-"*60)
-print("Raspberry Pi Supply Voltage: %.3f V" % supply_voltage)
-print("Raspberry Pi Current Current Consumption: %.3f mA" % supply_current)
-print("Raspberry Pi Current Power Consumption: %.3f mW" % supply_power)
+print(f"{DEVICE_NAME} Supply Voltage: %.3f V" % supply_voltage)
+print(f"{DEVICE_NAME} Current Current Consumption: %.3f mA" % supply_current)
+print(f"{DEVICE_NAME} Current Power Consumption: %.3f mW" % supply_power)
 print("-"*60)
 
 # Batteries information
@@ -55,7 +76,7 @@ except DeviceRangeError:
      print("-"*60)
      print('Battery power is too high.')
 
-# Raspberry Pi Communicates with MCU via i2c protocol.
+# LuckFox Pico Pi communicates with the UPS MCU over I2C.
 bus = smbus2.SMBus(DEVICE_BUS)
 
 aReceiveBuf = []
@@ -102,4 +123,3 @@ else:
             os.system("sudo sync && sudo halt")
             while True:
                 time.sleep(10)
-

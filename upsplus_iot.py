@@ -1,18 +1,42 @@
 #!/usr/bin/env python3
 
 # ''' Update the status of batteries to IoT platform '''
+import os
 import time
 import smbus2
 import requests
 from ina219 import INA219,DeviceRangeError
 import random
 
-DEVICE_BUS = 1
+DEVICE_NAME = "LuckFox Pico Pi"
+DEVICE_BUSES = (2, 1, 3, 4)
 DEVICE_ADDR = 0x17
 PROTECT_VOLT = 3700
 SAMPLE_TIME = 2
 FEED_URL = "https://api.52pi.com/feed"
 time.sleep(random.randint(0, 59))
+
+
+def detect_i2c_bus(addresses=(0x17, 0x40, 0x45), candidates=DEVICE_BUSES):
+    bus_override = os.environ.get("UPSPLUS_I2C_BUS", "").strip()
+    if bus_override:
+        return int(bus_override)
+
+    for bus_num in candidates:
+        try:
+            bus = smbus2.SMBus(bus_num)
+            try:
+                for address in addresses:
+                    bus.read_byte(address)
+            finally:
+                bus.close()
+            return bus_num
+        except Exception:
+            continue
+    raise RuntimeError(f"Could not find UPS Plus devices on I2C buses: {', '.join(str(bus) for bus in candidates)}")
+
+
+DEVICE_BUS = detect_i2c_bus()
 
 DATA = dict()
 
@@ -61,6 +85,7 @@ DATA['Version'] = aReceiveBuf[41] << 8 | aReceiveBuf[40]
 DATA['UID0'] = "%08X" % (aReceiveBuf[243] << 24 | aReceiveBuf[242] << 16 | aReceiveBuf[241] << 8 | aReceiveBuf[240])
 DATA['UID1'] = "%08X" % (aReceiveBuf[247] << 24 | aReceiveBuf[246] << 16 | aReceiveBuf[245] << 8 | aReceiveBuf[244])
 DATA['UID2'] = "%08X" % (aReceiveBuf[251] << 24 | aReceiveBuf[250] << 16 | aReceiveBuf[249] << 8 | aReceiveBuf[248])
+DATA['DeviceName'] = DEVICE_NAME
 
 print(DATA)
 r = requests.post(FEED_URL, data=DATA)
