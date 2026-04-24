@@ -149,11 +149,6 @@ install_wrapper upsplusv5-prometheus-exporter "${SCRIPT_DIR}/upsplusv5-prometheu
 install_wrapper upsplus-demo "${SCRIPT_DIR}/Full-featured-demo-code.py"
 install_wrapper upsplus-ota "${SCRIPT_DIR}/OTA_firmware_upgrade.py"
 
-if [ "$ENABLE_EXPORTER" -eq 1 ]; then
-  info "Installing Prometheus exporter service"
-  install_exporter_service
-fi
-
 if [ "$ENABLE_MONITOR_CRON" -eq 1 ] || [ "$ENABLE_IOT_CRON" -eq 1 ]; then
   need_cmd crontab
 fi
@@ -170,6 +165,11 @@ fi
 
 info "Testing UPS script"
 "$VENV_PYTHON" "${SCRIPT_DIR}/upsplus.py"
+
+if [ "$ENABLE_EXPORTER" -eq 1 ]; then
+  info "Installing Prometheus exporter service"
+  install_exporter_service
+fi
 
 info "Install complete."
 info "Commands:"
