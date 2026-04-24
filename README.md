@@ -27,6 +27,29 @@ cd ~
 curl -Lso- https://git.io/JLygb
 ```
 When encountering low battery, it will automatically shut down and turn off the UPS and it will restart when AC power comes.
+
+## Prometheus / Grafana
+This repo also includes:
+
+- `upsplusv5-prometheus-exporter.py`
+  A Prometheus exporter adapted for the LuckFox Pico Pi. It auto-detects the UPS I2C bus and exposes metrics on port `9105` by default.
+- `upsplusv5-battery-status.json`
+  A Grafana dashboard JSON for the exporter metrics.
+- `upsplusv5-prometheus-exporter.initd`
+  A BusyBox/init.d service script for LuckFox/Buildroot systems.
+
+Example:
+```bash
+cd /root/upsplus-luckfox-picopi
+python3 upsplusv5-prometheus-exporter.py
+```
+
+Install the service on LuckFox:
+```bash
+cp upsplusv5-prometheus-exporter.initd /etc/init.d/S80upsplusv5-prometheus-exporter
+chmod +x /etc/init.d/S80upsplusv5-prometheus-exporter
+/etc/init.d/S80upsplusv5-prometheus-exporter start
+```
 ## How to upgrade firmware of UPS.
 * Upgrade firmware will be via `OTA` style, `OTA` means `over the air`, it allows you `update` or `upgrade` firmware via internet.
 - 1. Make sure Raspberry Pi can access internet.
