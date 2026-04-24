@@ -46,6 +46,25 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
 
+venv_uses_system_site_packages() {
+  [ -f "${VENV_DIR}/pyvenv.cfg" ] || return 1
+  grep -qi '^include-system-site-packages *= *true' "${VENV_DIR}/pyvenv.cfg"
+}
+
+ensure_venv() {
+  if [ ! -x "$VENV_PYTHON" ]; then
+    info "Creating virtual environment at ${VENV_DIR}"
+    python3 -m venv --system-site-packages "$VENV_DIR"
+    return
+  fi
+
+  if ! venv_uses_system_site_packages; then
+    info "Recreating virtual environment with system site-packages"
+    rm -rf "$VENV_DIR"
+    python3 -m venv --system-site-packages "$VENV_DIR"
+  fi
+}
+
 install_wrapper() {
   name="$1"
   target="$2"
@@ -113,10 +132,7 @@ need_cmd i2cdetect
 info "Installing UPS Plus support for LuckFox Pico Pi"
 info "Repo: ${SCRIPT_DIR}"
 
-if [ ! -x "$VENV_PYTHON" ]; then
-  info "Creating virtual environment at ${VENV_DIR}"
-  python3 -m venv "$VENV_DIR"
-fi
+ensure_venv
 
 info "Installing Python dependencies into ${VENV_DIR}"
 "$VENV_PYTHON" -m pip install --upgrade pip setuptools wheel
